@@ -72,6 +72,20 @@ esp_err_t ec_session_append(const char *chat_id, const char *role, const char *c
 
 esp_err_t ec_session_get_history_json(const char *chat_id, char *buf, size_t size, int max_msgs)
 {
+    if (!buf || size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int history_limit = max_msgs;
+    if (history_limit <= 0) {
+        ESP_LOGW(TAG, "Invalid max_msgs=%d, clamping to 1", max_msgs);
+        history_limit = 1;
+    } else if (history_limit > EC_SESSION_MAX_MSGS) {
+        ESP_LOGW(TAG, "max_msgs=%d exceeds limit %d, clamping",
+                 max_msgs, EC_SESSION_MAX_MSGS);
+        history_limit = EC_SESSION_MAX_MSGS;
+    }
+
     char path[EC_SESSION_PATH_MAX];
     session_path(chat_id, path, sizeof(path));
 
@@ -83,7 +97,7 @@ esp_err_t ec_session_get_history_json(const char *chat_id, char *buf, size_t siz
     }
 
     /* Read all lines into a ring buffer of cJSON objects */
-    cJSON *messages[EC_SESSION_MAX_MSGS];
+    cJSON *messages[EC_SESSION_MAX_MSGS] = {0};
     int count = 0;
     int write_idx = 0;
 
@@ -98,36 +112,40 @@ esp_err_t ec_session_get_history_json(const char *chat_id, char *buf, size_t siz
         if (!obj) continue;
 
         /* Ring buffer: overwrite oldest if full */
-        if (count >= max_msgs) {
+        if (count >= history_limit) {
             cJSON_Delete(messages[write_idx]);
         }
         messages[write_idx] = obj;
-        write_idx = (write_idx + 1) % max_msgs;
-        if (count < max_msgs) count++;
+        write_idx = (write_idx + 1) % history_limit;
+        if (count < history_limit) count++;
     }
     fclose(f);
 
     /* Build JSON array with only role + content */
     cJSON *arr = cJSON_CreateArray();
-    int start = (count < max_msgs) ? 0 : write_idx;
+    int start = (count < history_limit) ? 0 : write_idx;
     for (int i = 0; i < count; i++) {
-        int idx = (start + i) % max_msgs;
+        int idx = (start + i) % history_limit;
         cJSON *src = messages[idx];
 
-        cJSON *entry = cJSON_CreateObject();
         cJSON *role = cJSON_GetObjectItem(src, "role");
         cJSON *content = cJSON_GetObjectItem(src, "content");
-        if (role && content) {
-            cJSON_AddStringToObject(entry, "role", role->valuestring);
-            cJSON_AddStringToObject(entry, "content", content->valuestring);
+        if (!cJSON_IsString(role) || !role->valuestring ||
+                !cJSON_IsString(content) || !content->valuestring) {
+            ESP_LOGW(TAG, "Skipping malformed session entry in %s", path);
+            continue;
         }
+
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddStringToObject(entry, "role", role->valuestring);
+        cJSON_AddStringToObject(entry, "content", content->valuestring);
         cJSON_AddItemToArray(arr, entry);
     }
 
     /* Cleanup ring buffer */
-    int cleanup_start = (count < max_msgs) ? 0 : write_idx;
+    int cleanup_start = (count < history_limit) ? 0 : write_idx;
     for (int i = 0; i < count; i++) {
-        int idx = (cleanup_start + i) % max_msgs;
+        int idx = (cleanup_start + i) % history_limit;
         cJSON_Delete(messages[idx]);
     }
 
@@ -200,4 +218,3 @@ static void session_path(const char *chat_id, char *buf, size_t size)
     uint32_t h = chat_id_hash(chat_id);
     snprintf(buf, size, "%s/se_%08x.jsonl", EC_FS_SESSION_DIR, (unsigned)h);
 }
-
