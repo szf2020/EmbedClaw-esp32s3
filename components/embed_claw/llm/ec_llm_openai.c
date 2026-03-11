@@ -290,9 +290,15 @@ static esp_err_t ec_llm_openai_chat_tools(ec_llm_provider_t *self, const char *s
                     }
                     ec_llm_tool_call_t *call = &resp->calls[resp->call_count];
                     cJSON *id = cJSON_GetObjectItem(tc, "id");
+                    cJSON *index = cJSON_GetObjectItem(tc, "index");
                     cJSON *func = cJSON_GetObjectItem(tc, "function");
                     if (id && cJSON_IsString(id)) {
                         strncpy(call->id, id->valuestring, sizeof(call->id) - 1);
+                    }
+                    if (index && cJSON_IsNumber(index)) {
+                        call->index = index->valueint;
+                    } else {
+                        call->index = resp->call_count;
                     }
                     if (func) {
                         cJSON *name = cJSON_GetObjectItem(func, "name");
@@ -368,6 +374,7 @@ static cJSON *convert_messages_openai(const char *system_prompt, cJSON *messages
             size_t off = 0;
             cJSON *block;
             cJSON *tool_calls = NULL;
+            int tool_call_index = 0;
             cJSON_ArrayForEach(block, content) {
                 cJSON *btype = cJSON_GetObjectItem(block, "type");
                 if (btype && cJSON_IsString(btype) && strcmp(btype->valuestring, "text") == 0) {
@@ -388,6 +395,7 @@ static cJSON *convert_messages_openai(const char *system_prompt, cJSON *messages
                     }
                     cJSON *id = cJSON_GetObjectItem(block, "id");
                     cJSON *name = cJSON_GetObjectItem(block, "name");
+                    cJSON *index = cJSON_GetObjectItem(block, "index");
                     cJSON *input = cJSON_GetObjectItem(block, "input");
                     if (!name || !cJSON_IsString(name)) {
                         continue;
@@ -396,6 +404,11 @@ static cJSON *convert_messages_openai(const char *system_prompt, cJSON *messages
                     cJSON *tc = cJSON_CreateObject();
                     if (id && cJSON_IsString(id)) {
                         cJSON_AddStringToObject(tc, "id", id->valuestring);
+                    }
+                    if (index && cJSON_IsNumber(index)) {
+                        cJSON_AddNumberToObject(tc, "index", index->valueint);
+                    } else {
+                        cJSON_AddNumberToObject(tc, "index", tool_call_index);
                     }
                     cJSON_AddStringToObject(tc, "type", "function");
                     cJSON *func = cJSON_CreateObject();
@@ -409,6 +422,7 @@ static cJSON *convert_messages_openai(const char *system_prompt, cJSON *messages
                     }
                     cJSON_AddItemToObject(tc, "function", func);
                     cJSON_AddItemToArray(tool_calls, tc);
+                    tool_call_index++;
                 }
             }
             if (text_buf) {

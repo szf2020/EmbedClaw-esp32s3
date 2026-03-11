@@ -142,6 +142,7 @@ static cJSON *build_assistant_content(const ec_llm_response_t *resp)
         cJSON_AddStringToObject(tool_block, "type", "tool_use");
         cJSON_AddStringToObject(tool_block, "id", call->id);
         cJSON_AddStringToObject(tool_block, "name", call->name);
+        cJSON_AddNumberToObject(tool_block, "index", call->index);
 
         cJSON *input = cJSON_Parse(call->input);
         if (input) {
@@ -213,53 +214,6 @@ static char *patch_tool_input_with_context(const ec_llm_tool_call_t *call, const
     return patched;
 }
 
-static void sanitize_tool_output_utf8(char *buf, size_t buf_size, size_t max_len)
-{
-    if (!buf || buf_size == 0) {
-        return;
-    }
-    if (max_len == 0 || max_len > buf_size) {
-        max_len = buf_size - 1;
-    }
-
-    size_t j = 0;
-    const char *src = buf;
-    char *dst = buf;
-    while (*src && j < max_len) {
-        unsigned char c = (unsigned char) * src;
-        if (c <= 0x7F) {
-            *dst++ = *src++; j++;
-            continue;
-        }
-        if (c >= 0xC2 && c <= 0xDF && (unsigned char)src[1] >= 0x80 && (unsigned char)src[1] <= 0xBF) {
-            if (j + 2 > max_len) {
-                break;
-            }
-            *dst++ = *src++; *dst++ = *src++; j += 2;
-            continue;
-        }
-        if (c >= 0xE0 && c <= 0xEF && (unsigned char)src[1] >= 0x80 && (unsigned char)src[1] <= 0xBF &&
-                (unsigned char)src[2] >= 0x80 && (unsigned char)src[2] <= 0xBF) {
-            if (j + 3 > max_len) {
-                break;
-            }
-            *dst++ = *src++; *dst++ = *src++; *dst++ = *src++; j += 3;
-            continue;
-        }
-        if (c >= 0xF0 && c <= 0xF4 && (unsigned char)src[1] >= 0x80 && (unsigned char)src[1] <= 0xBF &&
-                (unsigned char)src[2] >= 0x80 && (unsigned char)src[2] <= 0xBF &&
-                (unsigned char)src[3] >= 0x80 && (unsigned char)src[3] <= 0xBF) {
-            if (j + 4 > max_len) {
-                break;
-            }
-            *dst++ = *src++; *dst++ = *src++; *dst++ = *src++; *dst++ = *src++; j += 4;
-            continue;
-        }
-        *dst++ = '?'; src++; j++;
-    }
-    *dst = '\0';
-}
-
 static cJSON *build_tool_results(const ec_llm_response_t *resp, const ec_msg_t *msg,
                                  char *tool_output, size_t tool_output_size)
 {
@@ -277,8 +231,6 @@ static cJSON *build_tool_results(const ec_llm_response_t *resp, const ec_msg_t *
         tool_output[0] = '\0';
         ec_tools_execute(call->name, tool_input, tool_output, tool_output_size);
         free(patched_input);
-
-        sanitize_tool_output_utf8(tool_output, tool_output_size, TOOL_RESULT_MAX_FOR_LLM);
 
         ESP_LOGI(TAG, "Tool %s result: %d bytes", call->name, (int)strlen(tool_output));
 

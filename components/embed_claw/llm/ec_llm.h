@@ -38,6 +38,7 @@ typedef enum {
 typedef struct {
     char id[64];
     char name[32];
+    int index;
     char *input;
     size_t input_len;
 } ec_llm_tool_call_t;

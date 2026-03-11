@@ -28,7 +28,6 @@
 
 #define EC_SEARCH_BUF_SIZE     (16 * 1024)
 #define EC_SEARCH_RESULT_COUNT 5
-#define EC_QUERY_UTF8_MAX  256
 
 /* ==================== [Typedefs] ========================================== */
 
@@ -41,7 +40,6 @@ typedef struct {
 /* ==================== [Static Prototypes] ================================= */
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt);
-static void sanitize_utf8_query(const char *src, char *dst, size_t dst_size);
 static void format_results_tavily(cJSON *root, char *output, size_t output_size);
 static esp_err_t tavily_search(const char *query_str, char *output, size_t output_size);
 
@@ -87,44 +85,6 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-static void sanitize_utf8_query(const char *src, char *dst, size_t dst_size)
-{
-    if (!dst || dst_size == 0) {
-        return;
-    }
-    if (!src) {
-        dst[0] = '\0';
-        return;
-    }
-
-    size_t j = 0;
-    for (; *src && j < dst_size - 1; ) {
-        unsigned char c = (unsigned char) * src;
-        if (c <= 0x7F) {
-            dst[j++] = *src++;
-            continue;
-        }
-        if (c >= 0xC2 && c <= 0xDF && (unsigned char)src[1] >= 0x80 && (unsigned char)src[1] <= 0xBF) {
-            dst[j++] = *src++; dst[j++] = *src++;
-            continue;
-        }
-        if (c >= 0xE0 && c <= 0xEF && (unsigned char)src[1] >= 0x80 && (unsigned char)src[1] <= 0xBF &&
-                (unsigned char)src[2] >= 0x80 && (unsigned char)src[2] <= 0xBF) {
-            dst[j++] = *src++; dst[j++] = *src++; dst[j++] = *src++;
-            continue;
-        }
-        if (c >= 0xF0 && c <= 0xF4 && (unsigned char)src[1] >= 0x80 && (unsigned char)src[1] <= 0xBF &&
-                (unsigned char)src[2] >= 0x80 && (unsigned char)src[2] <= 0xBF &&
-                (unsigned char)src[3] >= 0x80 && (unsigned char)src[3] <= 0xBF) {
-            dst[j++] = *src++; dst[j++] = *src++; dst[j++] = *src++; dst[j++] = *src++;
-            continue;
-        }
-        dst[j++] = '?';
-        src++;
-    }
-    dst[j] = '\0';
-}
-
 static void format_results_tavily(cJSON *root, char *output, size_t output_size)
 {
     cJSON *results = cJSON_GetObjectItem(root, "results");
@@ -161,17 +121,14 @@ static void format_results_tavily(cJSON *root, char *output, size_t output_size)
 
 static esp_err_t tavily_search(const char *query_str, char *output, size_t output_size)
 {
-    /* LLM tool arguments may be non-UTF-8; Tavily rejects invalid bytes */
-    char query_utf8[EC_QUERY_UTF8_MAX];
-    sanitize_utf8_query(query_str, query_utf8, sizeof(query_utf8));
-
+    ESP_LOGI(TAG, "Query: %s", query_str);
     cJSON *body = cJSON_CreateObject();
     if (!body) {
         snprintf(output, output_size, "Error: Out of memory (JSON)");
         return ESP_ERR_NO_MEM;
     }
 
-    cJSON_AddStringToObject(body, "query", query_utf8);
+    cJSON_AddStringToObject(body, "query", query_str);
     cJSON_AddNumberToObject(body, "max_results", EC_SEARCH_RESULT_COUNT);
     cJSON_AddStringToObject(body, "search_depth", "basic");
     cJSON_AddStringToObject(body, "topic", "general");
@@ -314,9 +271,7 @@ static esp_err_t ec_tool_web_search_execute(const char *input_json, char *output
 
     ESP_LOGI(TAG, "Searching: %s", query->valuestring);
 
-    const char *qstr = query->valuestring;
+    esp_err_t err = tavily_search(query->valuestring, output, output_size);
     cJSON_Delete(input);
-    return tavily_search(qstr, output, output_size);
+    return err;
 }
-
-
