@@ -67,6 +67,9 @@ static const char *TAG = "tools_cron";
 
 static ec_cron_job_t s_jobs[EC_MAX_CRON_JOBS];
 static int s_job_count = 0;
+static bool s_cron_service_started = false;
+static bool s_skip_task_start_for_test = false;
+static bool s_skip_persist_for_test = false;
 
 static const ec_tools_t s_cron_add = {
     .name = "cron_add",
@@ -210,6 +213,10 @@ static void cron_generate_id(char *id_buf)
 
 static esp_err_t cron_save_jobs(void)
 {
+    if (s_skip_persist_for_test) {
+        return ESP_OK;
+    }
+
     cJSON *root = cJSON_CreateObject();
     cJSON *jobs_arr = cJSON_CreateArray();
 
@@ -348,6 +355,14 @@ static void cron_task_main(void *arg)
 
 static esp_err_t ec_cron_service_start(void)
 {
+    if (s_skip_task_start_for_test) {
+        s_cron_service_started = true;
+        return ESP_OK;
+    }
+
+    if (s_cron_service_started) {
+        return ESP_OK;
+    }
 
     /* Recompute next_run for all enabled jobs that don't have one */
     time_t now = time(NULL);
@@ -375,6 +390,7 @@ static esp_err_t ec_cron_service_start(void)
         return ESP_FAIL;
     }
 
+    s_cron_service_started = true;
     ESP_LOGI(TAG, "Cron service started (%d jobs, check every %ds)",
              s_job_count, EC_CRON_CHECK_INTERVAL_MS / 1000);
     return ESP_OK;
@@ -594,3 +610,17 @@ static esp_err_t ec_tool_cron_remove_execute(const char *input_json, char *outpu
     return err;
 }
 
+void ec_tools_cron_configure_for_test(bool skip_task_start, bool skip_persist)
+{
+    s_skip_task_start_for_test = skip_task_start;
+    s_skip_persist_for_test = skip_persist;
+}
+
+void ec_tools_cron_reset_for_test(void)
+{
+    memset(s_jobs, 0, sizeof(s_jobs));
+    s_job_count = 0;
+    s_cron_service_started = false;
+    s_skip_task_start_for_test = false;
+    s_skip_persist_for_test = false;
+}
